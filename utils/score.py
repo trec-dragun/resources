@@ -14,26 +14,7 @@ IMPORTANCE_MAP = {"A: Have to Know": 4, "B: Good to Know": 2, "C: Nice to Know":
 
 # ── Load rubrics ─────────────────────────────────────────────────────────────
 
-def load_rubric_questions():
-    """Load rubric questions with importance weights (for question generation scoring)."""
-    rows = []
-    for path in sorted(glob.glob(os.path.join(RUBRICS_DIR, "*.json"))):
-        with open(path) as f:
-            data = json.load(f)
-        topic_id = data["topic_id"]
-        for q in data["rubrics"]:
-            rows.append({
-                "topic_id": topic_id,
-                "rubric_question_rank": int(q["question_id"].split("-")[-1]),
-                "question_importance": q["importance"],
-            })
-    df = pd.DataFrame(rows)
-    df["question_score"] = df["question_importance"].map(IMPORTANCE_MAP)
-    return df
-
-
-def load_rubric_answers():
-    """Load rubric answers with importance weights (for report generation scoring)."""
+def load_rubrics():
     rows = []
     for path in sorted(glob.glob(os.path.join(RUBRICS_DIR, "*.json"))):
         with open(path) as f:
@@ -43,7 +24,7 @@ def load_rubric_answers():
             for a in q["short_answers"]:
                 rows.append({
                     "topic_id": topic_id,
-                    "question_id": q["question_id"],
+                    "rubric_question_rank": int(q["question_id"].split("-")[-1]),
                     "answer_id": a["answer_id"],
                     "question_importance": q["importance"],
                 })
@@ -54,26 +35,29 @@ def load_rubric_answers():
 
 # ── Question generation scoring ──────────────────────────────────────────────
 
-def score_question_generation(assessments, compound_check, rubric_questions, output_dir, prefix):
+def score_question_generation(assessments, compound_check, rubrics, output_dir, prefix):
     # Map assessment labels to scores
     assessments["score"] = assessments["annotation"].map(
         {"very-similar": 1, "similar": 0.5, "different": 0, "very-different": 0}
     )
 
     # Apply compound question penalty: compound questions get zero credit
-    compound_check = compound_check.rename(columns={"rank": "run_question_rank"})
     assessments = assessments.merge(
-        compound_check[["topic_id", "run_tag", "run_question_rank", "compound_question"]],
+        compound_check[["topic_id", "run_tag", "run_question_rank", "auto_compound_question_assessment"]],
         on=["topic_id", "run_tag", "run_question_rank"], how="left",
     )
-    assessments["score"] = assessments["score"] * assessments["compound_question"].map({True: 0, False: 1.0})
+    assessments["score"] = (assessments["score"] *
+                            assessments["auto_compound_question_assessment"].map({"compound": 0, "not-compound": 1.0}))
 
     # Merge rubric importance weights
-    assessments = assessments.merge(rubric_questions, on=["topic_id", "rubric_question_rank"], how="left")
+    rubrics = rubrics[["topic_id", "rubric_question_rank", "question_score"]].drop_duplicates(keep="first")
+    assessments = assessments.merge(rubrics, on=["topic_id", "rubric_question_rank"], how="left")
     assessments["score"] = assessments["score"] * assessments["question_score"]
 
     # Compute per-topic, per-run scores
     results = []
+    if assessments.isna().any().any():
+        raise "Missing values detected."
     for topic_id in sorted(assessments["topic_id"].unique()):
         topic = assessments[assessments["topic_id"] == topic_id]
         max_score = topic.drop_duplicates(subset=["rubric_question_rank"])["question_score"].sum()
@@ -100,18 +84,20 @@ def score_report_generation(assessments, rubric_answers, output_dir, prefix):
     )
 
     # Merge rubric importance weights
-    assessments = assessments.merge(rubric_answers, on=["topic_id", "question_id", "answer_id"], how="left")
+    assessments = assessments.merge(rubric_answers, on=["topic_id", "answer_id"], how="left")
 
     # Compute per-topic, per-run scores
     results = []
+    if assessments.isna().any().any():
+        raise "Missing values detected."
     for topic_id in sorted(assessments["topic_id"].unique()):
         rubric_topic = rubric_answers[rubric_answers["topic_id"] == topic_id]
-        max_score = rubric_topic.drop_duplicates(subset=["question_id"])["question_score"].sum()
+        max_score = rubric_topic.drop_duplicates(subset=["rubric_question_rank"])["question_score"].sum()
         for run_tag in sorted(assessments[assessments["topic_id"] == topic_id]["run_tag"].unique()):
             part = assessments[(assessments["topic_id"] == topic_id) & (assessments["run_tag"] == run_tag)]
             supportive_total, contradictory_total = 0.0, 0.0
-            for qid in sorted(part["question_id"].unique()):
-                q_part = part[part["question_id"] == qid]
+            for qid in sorted(part["rubric_question_rank"].unique()):
+                q_part = part[part["rubric_question_rank"] == qid]
                 w = q_part["question_score"].iloc[0]
                 n = len(q_part)
                 supportive_total += q_part[q_part["score"] > 0]["score"].sum() / n * w
@@ -135,32 +121,33 @@ def score_report_generation(assessments, rubric_answers, output_dir, prefix):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="DRAGUN Scoring")
+    parser = argparse.ArgumentParser(description="DRAGUN Scoring with Human or Automatic Assessments")
     parser.add_argument("--task", required=True,
                         choices=["question_generation_evaluation", "report_generation_evaluation"])
     parser.add_argument("--type", required=True, choices=["human", "auto"])
-    parser.add_argument("--input", required=True, help="Folder containing assessment CSVs")
+    parser.add_argument("--assessment_input", required=True,
+                        help="CSV file containing human or automatic assessments")
+    parser.add_argument("--compound_check_input", required=False,
+                        help="CSV file containing compound check assessments (required for question evaluation)")
     parser.add_argument("--output", required=True, help="Folder to write result CSVs")
     args = parser.parse_args()
 
+    # Conditional validation: compound_check_input is required for question_generation_evaluation
+    if args.task == "question_generation_evaluation" and args.compound_check_input is None:
+        parser.error("--compound_check_input is required when --task is question_generation_evaluation")
+
     os.makedirs(args.output, exist_ok=True)
-    rubric_questions = load_rubric_questions()
-    rubric_answers = load_rubric_answers()
+    rubrics = load_rubrics()
 
     if args.task == "question_generation_evaluation":
-        if args.type == "human":
-            assessments = pd.read_csv(os.path.join(args.input, "question_assessments.csv"))
-            compound = pd.read_csv(os.path.join(args.input, "compound_question_check.csv"))
-        else:
-            assessments = pd.read_csv(os.path.join(args.input, "auto_question_assessments.csv"))
-            assessments.rename(columns={"assessment": "annotation"}, inplace=True)
-            compound = pd.read_csv(os.path.join(args.input, "auto_compound_question_check.csv"))
-        score_question_generation(assessments, compound, rubric_questions, args.output, args.type)
+        assessments = pd.read_csv(args.assessment_input)
+        if args.type == 'auto':
+            assessments = assessments.rename(columns={"auto_assessment": "annotation"})
+        compound = pd.read_csv(args.compound_check_input)
+        score_question_generation(assessments, compound, rubrics, args.output, args.type)
 
     elif args.task == "report_generation_evaluation":
-        if args.type == "human":
-            assessments = pd.read_csv(os.path.join(args.input, "report_assessments.csv"))
-        else:
-            assessments = pd.read_csv(os.path.join(args.input, "auto_report_assessments.csv"))
-            assessments.rename(columns={"assessment": "annotation"}, inplace=True)
-        score_report_generation(assessments, rubric_answers, args.output, args.type)
+        assessments = pd.read_csv(args.assessment_input)
+        if args.type == 'auto':
+            assessments = assessments.rename(columns={"auto_assessment": "annotation"})
+        score_report_generation(assessments, rubrics, args.output, args.type)
