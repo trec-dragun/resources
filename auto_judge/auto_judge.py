@@ -15,6 +15,10 @@ BASE_URL = "http://mooneye.cs.uwaterloo.ca:8000/v1"  # Replace it with your vLLM
 MODEL = "openai/gpt-oss-120b"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "..", "data")
+# Organizer runs used as few-shot examples, excluded from judging
+question_organizer_runs = ['organizer-gpt-oss-t1', 'dragun-organizers-starter-kit-task-1',
+                           'organizer-t1-perplex', 'organizer-t1-chatgpt']
+report_organizer_runs = ['organizer-gpt-oss-t2', 'dragun-organizers-starter-kit-task-2']
 # ─────────────────────────────────────────────────────────────────────────────
 
 client = openai.OpenAI(base_url=BASE_URL, api_key="EMPTY")
@@ -44,8 +48,8 @@ def call_llm(system_prompt, user_input, response_schema, schema_name="assessment
 # ── Pydantic schemas ─────────────────────────────────────────────────────────
 
 class CompoundAssessment(BaseModel):
-    reasoning: str
-    compound_question: bool
+    rationale: str
+    assessment_decision: Literal["compound", "not-compound"]
 
 
 class QuestionAssessment(BaseModel):
@@ -55,7 +59,7 @@ class QuestionAssessment(BaseModel):
 
 class ReportAnswerAssessment(BaseModel):
     answer_id: str
-    reasoning: str
+    rationale: str
     assessment_decision: Literal["supports", "partial", "contradicts", "none"]
 
 
@@ -83,32 +87,32 @@ def load_rubrics():
     return rubrics
 
 
-# ── Task: compound_question_check ────────────────────────────────────────────
+# ── Task: auto_compound_question_check ────────────────────────────────────────────
 
-def run_compound_question_check(input_folder, output_folder):
+def run_auto_compound_question_check(input_folder, output_folder):
     system_prompt = open(os.path.join(SCRIPT_DIR, "system_prompts", "compound_question_check.txt")).read()
 
     rows = []
     for path in sorted(glob.glob(os.path.join(input_folder, "*"))):
         df = pd.read_csv(path, sep="\t", header=None,
-                         names=["topic_id", "team", "run_tag", "rank", "question_text"])
+                         names=["topic_id", "team", "run_tag", "run_question_rank", "run_question_text"])
         df["run_tag"] = os.path.basename(path)
         rows.append(df)
     questions = pd.concat(rows, ignore_index=True)
 
     outputs = []
-    for _, row in tqdm(questions.iterrows(), total=len(questions), desc="compound_question_check"):
-        user_input = (f"Question: {row['question_text']}\n"
+    for _, row in tqdm(questions.iterrows(), total=len(questions), desc="auto_compound_question_check"):
+        user_input = (f"Question: {row['run_question_text']}\n"
                       f"Check if this question is a compound question. Reason first and then decide.")
         reasoning, content = call_llm(system_prompt, user_input, CompoundAssessment.model_json_schema())
         result = CompoundAssessment.model_validate_json(content)
         outputs.append({
             "topic_id": row["topic_id"],
             "run_tag": row["run_tag"],
-            "rank": row["rank"],
-            "question_text": row["question_text"],
-            "compound_question": result.compound_question,
-            "reasoning": result.reasoning,
+            "run_question_rank": row["run_question_rank"],
+            "run_question_text": row["run_question_text"],
+            "auto_compound_question_assessment": result.assessment_decision,
+            "auto_assessment_rationale": result.rationale,
         })
 
     pd.DataFrame(outputs).to_csv(os.path.join(output_folder, "auto_compound_question_check.csv"), index=False)
@@ -131,16 +135,13 @@ def run_auto_question_evaluation(input_folder, output_folder):
         rows.append(df)
     all_questions = pd.concat(rows, ignore_index=True)
 
-    # Identify organizer baseline runs (used as few-shot examples, excluded from judging)
-    organizer_runs = sorted(set(human_assessments["run_tag"].unique()) & set(all_questions["run_tag"].unique()))
-
-    # Build few-shot examples from organizer baselines + human assessments
-    example_questions = all_questions[all_questions["run_tag"].isin(organizer_runs)].copy()
+    # Build few-shot examples from organizer baselines with human assessments
+    example_questions = all_questions[all_questions["run_tag"].isin(question_organizer_runs)].copy()
     examples = {}
     for topic_id in sorted(human_assessments["topic_id"].unique()):
         topic_assessments = human_assessments[
             (human_assessments["topic_id"] == topic_id) &
-            (human_assessments["run_tag"].isin(organizer_runs))
+            (human_assessments["run_tag"].isin(question_organizer_runs))
         ]
         topic_questions = example_questions[example_questions["topic_id"] == topic_id]
         for rq_rank in sorted(topic_assessments["rubric_question_rank"].unique()):
@@ -153,7 +154,7 @@ def run_auto_question_evaluation(input_folder, output_folder):
             ]
 
     # Build and process tasks
-    participant_runs = sorted(set(all_questions["run_tag"].unique()) - set(organizer_runs))
+    participant_runs = sorted(set(all_questions["run_tag"].unique()) - set(question_organizer_runs))
     outputs = []
     tasks = []
     for topic_id, topic_rubrics in sorted(rubrics.items()):
@@ -186,8 +187,8 @@ def run_auto_question_evaluation(input_folder, output_folder):
             "rubric_question_rank": rq_rank,
             "run_tag": run_tag,
             "run_question_rank": run_q_rank,
-            "assessment": result.assessment_decision,
-            "rationale": result.rationale,
+            "auto_assessment": result.assessment_decision,
+            "auto_rationale": result.rationale,
         })
 
     pd.DataFrame(outputs).to_csv(os.path.join(output_folder, "auto_question_assessments.csv"), index=False)
@@ -219,13 +220,10 @@ def run_auto_report_evaluation(input_folder, output_folder):
                 reports.append({"topic_id": topic_id, "run_tag": run_tag, "report": report_text})
     reports = pd.DataFrame(reports)
 
-    # Identify organizer baseline runs (used as few-shot examples, excluded from judging)
-    organizer_runs = sorted(set(human_assessments["run_tag"].unique()) & set(reports["run_tag"].unique()))
-
-    # Build few-shot examples from organizer baselines + human assessments
+    # Build few-shot examples from organizer baselines with human assessments
     examples = {}
     for topic_id in sorted(human_assessments["topic_id"].unique()):
-        for org_run in organizer_runs:
+        for org_run in report_organizer_runs:
             report_text = reports[
                 (reports["topic_id"] == topic_id) & (reports["run_tag"] == org_run)
             ]["report"].values[0]
@@ -236,14 +234,14 @@ def run_auto_report_evaluation(input_folder, output_folder):
             examples[(topic_id, org_run)] = {"report": report_text, "assessments": assessments_dict}
 
     # Process non-organizer reports
-    participant_reports = reports[~reports["run_tag"].isin(organizer_runs)].sort_values("topic_id")
+    participant_reports = reports[~reports["run_tag"].isin(report_organizer_runs)].sort_values("topic_id")
 
     outputs = []
     for _, row in tqdm(participant_reports.iterrows(), total=len(participant_reports), desc="auto_report_evaluation"):
         topic_id, run_tag, report_text = row["topic_id"], row["run_tag"], row["report"]
 
         example_strs = []
-        for i, org_run in enumerate(organizer_runs, 1):
+        for i, org_run in enumerate(report_organizer_runs, 1):
             example_strs.append(
                 f"Example {i}:\n\n"
                 f"{json.dumps(examples[(topic_id, org_run)], ensure_ascii=False, indent=2)}"
@@ -269,8 +267,8 @@ def run_auto_report_evaluation(input_folder, output_folder):
                 "topic_id": topic_id,
                 "run_tag": run_tag,
                 "answer_id": a.answer_id,
-                "assessment": a.assessment_decision,
-                "reasoning": a.reasoning,
+                "auto_assessment": a.assessment_decision,
+                "auto_rationale": a.rationale,
             })
 
     pd.DataFrame(outputs).to_csv(os.path.join(output_folder, "auto_report_assessments.csv"), index=False)
@@ -281,15 +279,15 @@ def run_auto_report_evaluation(input_folder, output_folder):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DRAGUN AutoJudge")
     parser.add_argument("--task", required=True,
-                        choices=["compound_question_check", "auto_question_evaluation", "auto_report_evaluation"])
+                        choices=["auto_compound_question_check", "auto_question_evaluation", "auto_report_evaluation"])
     parser.add_argument("--input_folder_path", required=True, help="Folder containing run files")
     parser.add_argument("--output_folder_path", required=True, help="Folder to write output CSVs")
     args = parser.parse_args()
 
     os.makedirs(args.output_folder_path, exist_ok=True)
 
-    if args.task == "compound_question_check":
-        run_compound_question_check(args.input_folder_path, args.output_folder_path)
+    if args.task == "auto_compound_question_check":
+        run_auto_compound_question_check(args.input_folder_path, args.output_folder_path)
     elif args.task == "auto_question_evaluation":
         run_auto_question_evaluation(args.input_folder_path, args.output_folder_path)
     elif args.task == "auto_report_evaluation":
