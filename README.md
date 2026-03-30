@@ -57,17 +57,19 @@ The DRAGUN package:
 
 Some resources are conventionally hosted on other sites, such as topics, rubrics, human assessments, and raw run files.
 
-| Resource | How to obtain / notes | Expected path |
-|---|---|---|
-| Topics (30 news articles) | [Download Link](https://trec-dragun.github.io/trec-2025-dragun-topics.jsonl) | `data/trec-2025-dragun-topics.jsonl` |
-| Human rubrics (30) | [NIST TREC Browser](https://pages.nist.gov/trec-browser/) | `data/human_rubrics/` |
-| Human assessments | [NIST TREC Browser](https://pages.nist.gov/trec-browser/) | `data/human_assessments/` |
-| Raw submitted runs | [NIST TREC Browser](https://pages.nist.gov/trec-browser/) | `data/runs/question_generation_runs/`, `data/runs/report_generation_runs/` |
-| Official evaluation results | [NIST TREC Browser](https://pages.nist.gov/trec-browser/) | `data/official_evaluation_results/` |
-| Participation guidelines | [DRAGUN track website](https://trec-dragun.github.io/) | N/A |
-| Organizer baseline system | [trec-dragun/2025-starter-kit](https://github.com/trec-dragun/2025-starter-kit) | N/A |
+| Resource | How to obtain / notes                                                            | Expected path |
+|---|----------------------------------------------------------------------------------|---|
+| Topics (30 news articles) | Within the [DRAGUN package](https://trec.nist.gov/data/dragun/DRAGUN.zip) | `data/trec-2025-dragun-topics.jsonl` |
+| Human rubrics (30) | Within the [DRAGUN package](https://trec.nist.gov/data/dragun/DRAGUN.zip)        | `data/human_rubrics/` |
+| Human assessments | Within the [DRAGUN package](https://trec.nist.gov/data/dragun/DRAGUN.zip)        | `data/human_assessments/` |
+| Raw submitted runs | [NIST TREC Browser](https://pages.nist.gov/trec-browser/trec34/dragun/runs/)     | `data/runs/question_generation_runs/`, `data/runs/report_generation_runs/` |
+| Official evaluation results | Within the [DRAGUN package](https://trec.nist.gov/data/dragun/DRAGUN.zip)        | `data/official_evaluation_results/` |
+| Participation guidelines | [DRAGUN track website](https://trec-dragun.github.io/)                           | N/A |
+| Organizer baseline system | [trec-dragun/2025-starter-kit](https://github.com/trec-dragun/2025-starter-kit)  | N/A |
 
-**Note**: The NIST TREC Browser link for DRAGUN is not live yet. When available, navigate to TREC-34 (2025) and then the DRAGUN section to download the assessor rubrics and judgments, submitted runs, and official evaluation results. The format is similar to the previous [TREC 2024 Lateral Reading Track](https://pages.nist.gov/trec-browser/trec33/lateral/overview/). Access to the raw submitted runs requires an additional step: https://trec.nist.gov/results.html.
+You only need to download the DRAGUN package once.
+TREC's DRAGUN page: https://pages.nist.gov/trec-browser/trec34/dragun/.
+Access to the raw submitted runs requires an additional step: https://trec.nist.gov/results.html.
 
 ## Collection Stats
 
