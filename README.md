@@ -68,7 +68,7 @@ Some resources are conventionally hosted on other sites, such as topics, rubrics
 | Organizer baseline system | [trec-dragun/2025-starter-kit](https://github.com/trec-dragun/2025-starter-kit)  | N/A |
 
 You only need to download the DRAGUN package once.
-TREC's DRAGUN page: https://pages.nist.gov/trec-browser/trec34/dragun/.
+TREC's DRAGUN page: https://pages.nist.gov/trec-browser/trec34/dragun/](https://pages.nist.gov/trec-browser/trec34/dragun/data/.
 Access to the raw submitted runs requires an additional step: https://trec.nist.gov/results.html.
 
 ## Collection Stats
